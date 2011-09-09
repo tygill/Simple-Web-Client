@@ -1,0 +1,200 @@
+Required functionality:
+
+Parse input
+ hostname
+ portnumber
+ path
+ -d (debug)
+
+Process input
+ Translate hostname to ip address (getaddrinfo())
+
+Download the page
+ Open the socket
+ Confirm the socket
+  Gracefully handle and throw errors around
+ Read header for size
+  Header structure:
+   Initial line ex: 'HTTP/1.0 404 Not Found'
+   Header lines: 'Header-Name: value'
+    Note - all header lines should end in CrLf, but not all do. Handle Lf.
+    Whitespace is allowed between Header-Name and :, and : and value, but whitespace before Header-Name indicates that they are part of the previous line, but split for readability
+    Content-Length is the one we'll be mostly concerned with
+   One blank line (CrLf)
+   Message body (Content-Length should be the size)
+ Create the buffer
+ Stream objects to buffer
+
+
+
+// Pseudocode
+
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
+
+class HttpResponse {
+    std::map<std::string, std::string> headers;
+    std::string body;
+}
+
+// static member of HttpResponse perhaps?
+boost::shared_ptr<HttpResponse> Http::loadPage(std::string host, unsigned short destPort, std::string uri) {
+    boost::shared_ptr<HttpResponse> ret;
+    int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == SOCKET_ERROR) {
+        std::cout << "Socket Error" << std::endl;
+        // Print more information about the error
+        return ret;
+    }
+    
+    // This can't really be wrapped in a smart_ptr, as it souldn't free
+    // the linked list chain of subsequent addrinfo's on a delete.
+    // So hopefully there are no errors between here and the freeaddrinfo()
+    addrinfo* info = NULL;
+    int error = getaddrinfo(host.c_str(), NULL, NULL, &info);
+    if (error) {
+        // Print host resolution error
+        return ret;
+    }
+    
+    // I'm not going to do ANY IP6 checking or code here, so sorry.
+    // Cast to sockaddr_in instead of leaving it as a plain sockaddr
+    //  That way we can extract the IP4 address
+    boost::scoped_ptr(sockaddr_in) address((sockaddr_in*)info->ai_addr);
+    
+    // address might have already loaded port and family info, but we'll
+    // overwrite it with whatever we got from the commandline
+    // address->sin_addr.s_addr is already loaded from getaddrinfo()
+    address->sin_port = htons(destPort);
+    address->sin_family = AF_INET;
+    
+    if (connect(sock, (sockaddr*)address.get(), sizeof(address.get()) == SOCKET_ERROR) {
+        // Print connection error
+        freeaddrinfo(address);
+        return ret;
+    }
+    
+    // Read socket data, at first only one byte at a time until the whole
+    // header is in.
+    // Here is where we can break things down into functions like so:
+    //  int readSocket(socket, HttpResponse) -> reads until read() == 0.
+    //   Builds the header and body, and puts them in the HttpResponse object
+    //   Returns error code
+    //  int readHeader(socket, HttpResponse)
+    //   Reads the full header (including the trailing \r\n\r\n, and loads
+    //   the HttpResponse's header map appropriately.
+    //   If readHeaderName returns "", then the next value should simply be
+    //   appended to the previous name key that was read, with a single space
+    //   prepended.
+    //   Returns error code
+    //  std::string readHeaderName(socket)
+    //   Unless the first character is whitespace, reads until : is found,
+    //   or until \n is found (as an error proofing check)
+    //   If the first character is whitespace, only reads the first char.
+    //   Gets the name of the next header from the headerLine (everything before
+    //   the :). Strips whitespace off from the end as well.
+    //   Returns "" if whitespace was found first (means append the next value
+    //   to the previous name.) or the name of the next header key.
+    //  std::string readHeaderValue(socket)
+    //   Reads to the end of the line, and returns the value for the header.
+    //   If both this and name return "", then the header is done.
+    // Note: The more I think about this, the more I think some sort of
+    //  preloaded caching or tokenizer would really be good.
+    // Tokenizer design:
+    //  TokenTypes
+    //   HttpStatus
+    //   HeaderName
+    //   HeaderValue
+    //   HeaderTerminator
+    //   Body
+    
+    bool advanceTokenizer = true;
+    while (tokenizer.hasToken()) {
+        switch (tokenizer.tokenType()) {
+        case HttpStatus:
+            // If we needed to redirect or anything, here's where we could
+            // do that, and return a newly loaded page, which could then
+            // even function recursively.
+            // If so desired, this could also parse out the status message
+            // and put it into the HttpResponse, which would actually be
+            // a really good idea.
+        break;
+        case HeaderName:
+            // We're going to grab the next token, and make sure it's a
+            // HeaderValue token, so store the HeaderName
+            std::string name = tokenizer.tokenValue();
+            tokenizer.next();
+            if (tokenizer.hasToken() && tokenizer.tokenType() == HeaderValue) {
+                HttpResponse.addHeader(name, tokenizer.tokenValue());
+            } else {
+                // Print some sort of warning message - the header name
+                // has no matched pair.
+                // If we could, reset the previous token to undo the
+                // change, but at present that's not possible and probably
+                // not worth it
+                advanceTokenizer = false;
+            }
+        break;
+        case HeaderValue:
+            // Print some sort of warning message - HeaderValues should only
+            // be found after a HeaderName
+        break;
+        case HeaderTerminator:
+            // We don't really need to do anything here, this is just a heads up
+        break;
+        case Content:
+            // We should never get multiple contents back from a single tokenizer
+            HttpResponse.setContent(tokenizer.tokenValue());
+        break;
+        }
+        if (advanceTokenizer) {
+            tokenizer.next();
+        }
+        advanceTokenizer = true;
+    }
+    
+    
+    // The socket is owned by the Tokenizer, so he closes it.
+    //if (close(sock) == SOCKET_ERROR) {
+        // Print error message, but by now we have what we wanted anyway,
+        // so we won't return an error message...usually closing shouldn't
+        // have problems anyway, I'd hope
+    //}
+    
+    freeaddrinfo(address);
+    return ret;
+}
+
+
+class HttpTokenizer {
+public:
+    HttpTokenizer(socket);
+    ~HttpTokenizer();
+    enum TokenType {
+        HttpStatus,
+        HeaderName,
+        HeaderValue,
+        HeaderTerminator,
+        Content,
+        EndOfFile
+    }
+    // next() is called implicitly by the constructor, so you can call
+    // hasToken() right away.
+    // Note: hasToken() will return false if the current token is an
+    // EndOfFile token, as that really means there is nothing left to get.
+    bool hasToken() const;
+    TokenType tokenType() const;
+    std::string tokenValue() const;
+    void next();
+private:
+    int sock;
+    TokenType currTokenType;
+    std::string currTokenValue;
+    // Yes, this isn't optimal in performance factors.
+    // But I would have practically be reimplementing this on my own, so
+    // the default implementation is probably an enhancement on that, and
+    // besides - this is far from a performance critical application.
+    std::string buffer;
+    bool headerComplete;
+}
