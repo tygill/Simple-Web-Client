@@ -9,6 +9,8 @@
 #define SOCKET_ERROR -1
 #endif
 
+#include <sstream>
+#include <string>
 #include <iostream>
 #include <cstdio>
 
@@ -75,7 +77,9 @@ int error;
     request.append(" HTTP/1.1\r\nHost: ");
     request.append(host);
     request.append(":");
-    request.append(std::string(destPort));
+    std::ostringstream osstream;
+    osstream << destPort;
+    request.append(osstream.str());
     request.append("\r\n\r\n");
     //std::cout << request << std::endl;
     // Does this need +1?
